@@ -13,17 +13,10 @@ export const PHONE_CONNECTION_CB = 'CB:Pong'
 export const WA_DEFAULT_EPHEMERAL = 7 * 24 * 60 * 60
 
 export const NOISE_MODE = 'Noise_XX_25519_AESGCM_SHA256\0\0\0\0'
-export const DICT_VERSION = 2
-export const KEY_BUNDLE_TYPE = Buffer.from([5])
-export const NOISE_WA_HEADER = Buffer.from(
-	[ 87, 65, 6, DICT_VERSION ]
-) // last is "DICT_VERSION"
+export const NOISE_WA_HEADER = new Uint8Array([87, 65, 5, 2]) // last is "DICT_VERSION"
+
 /** from: https://stackoverflow.com/questions/3809401/what-is-a-good-regular-expression-to-match-a-url */
 export const URL_REGEX = /[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&//=]*)?/gi
-
-export const WA_CERT_DETAILS = {
-	SERIAL: 0,
-}
 
 const BASE_CONNECTION_CONFIG: CommonSocketConfig<any> = {
 	version: version as any,
@@ -31,7 +24,7 @@ const BASE_CONNECTION_CONFIG: CommonSocketConfig<any> = {
 
 	waWebSocketUrl: 'wss://web.whatsapp.com/ws/chat',
 	connectTimeoutMs: 20_000,
-	keepAliveIntervalMs: 15_000,
+	keepAliveIntervalMs: 25_000,
 	logger: logger.child({ class: 'baileys' }),
 	printQRInTerminal: false,
 	emitOwnEvents: true,
@@ -43,7 +36,7 @@ const BASE_CONNECTION_CONFIG: CommonSocketConfig<any> = {
 
 export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	...BASE_CONNECTION_CONFIG,
-	linkPreviewImageThumbnailWidth: 192,
+	waWebSocketUrl: 'wss://web.whatsapp.com/ws/chat',
 	getMessage: async() => undefined
 }
 
@@ -66,6 +59,4 @@ export const MEDIA_PATH_MAP: { [T in MediaType]: string } = {
 
 export const MEDIA_KEYS = Object.keys(MEDIA_PATH_MAP) as MediaType[]
 
-export const MIN_PREKEY_COUNT = 5
-
-export const INITIAL_PREKEY_COUNT = 30
+export const KEY_BUNDLE_TYPE = Buffer.from([5])
