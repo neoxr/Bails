@@ -5,7 +5,7 @@ import { areJidsSameUser, BinaryNode, isJidBroadcast, isJidGroup, isJidStatusBro
 import { unpadRandomMax16 } from './generics'
 import { decryptGroupSignalProto, decryptSignalProto, processSenderKeyMessage } from './signal'
 
-const NO_MESSAGE_FOUND_ERROR_TEXT = 'No message found'
+const NO_MESSAGE_FOUND_ERROR_TEXT = 'Message absent from node'
 
 type MessageType = 'chat' | 'peer_broadcast' | 'other_broadcast' | 'group' | 'direct_peer_status' | 'other_status'
 
@@ -24,7 +24,7 @@ export const decodeMessageStanza = (stanza: BinaryNode, auth: AuthenticationStat
 	if(isJidUser(from)) {
 		if(recipient) {
 			if(!isMe(from)) {
-				throw new Boom('')
+				throw new Boom('receipient present, but msg not from me', { data: stanza })
 			}
 
 			chatId = recipient
@@ -56,6 +56,8 @@ export const decodeMessageStanza = (stanza: BinaryNode, auth: AuthenticationStat
 
 		chatId = from
 		author = participant
+	} else {
+		throw new Boom('Unknown message type', { data: stanza })
 	}
 
 	const sender = msgType === 'chat' ? author : chatId
@@ -88,6 +90,12 @@ export const decodeMessageStanza = (stanza: BinaryNode, auth: AuthenticationStat
 			let decryptables = 0
 			if(Array.isArray(stanza.content)) {
 				for(const { tag, attrs, content } of stanza.content) {
+					if(tag === 'verified_name' && content instanceof Uint8Array) {
+						const cert = proto.VerifiedNameCertificate.decode(content)
+						const details = proto.VerifiedNameDetails.decode(cert.details)
+						fullMessage.verifiedBizName = details.verifiedName
+					}
+
 					if(tag !== 'enc') {
 						continue
 					}
@@ -111,6 +119,8 @@ export const decodeMessageStanza = (stanza: BinaryNode, auth: AuthenticationStat
 							const user = isJidUser(sender) ? sender : author
 							msgBuffer = await decryptSignalProto(user, e2eType, content as Buffer, auth)
 							break
+						default:
+							throw new Error(`Unknown e2e type: ${e2eType}`)
 						}
 
 						let msg: proto.IMessage = proto.Message.decode(unpadRandomMax16(msgBuffer))

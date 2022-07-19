@@ -1,11 +1,10 @@
 import { Boom } from '@hapi/boom'
-import { createCipheriv, createDecipheriv } from 'crypto'
+import { Logger } from 'pino'
 import { proto } from '../../WAProto'
-import { NOISE_MODE, NOISE_WA_HEADER } from '../Defaults'
+import { NOISE_MODE, NOISE_WA_HEADER, WA_CERT_DETAILS } from '../Defaults'
 import { KeyPair } from '../Types'
-import { Binary } from '../WABinary'
 import { BinaryNode, decodeBinaryNode } from '../WABinary'
-import { Curve, hkdf, sha256 } from './crypto'
+import { aesDecryptGCM, aesEncryptGCM, Curve, hkdf, sha256 } from './crypto'
 
 const generateIV = (counter: number) => {
 	const iv = new ArrayBuffer(12)
@@ -14,20 +13,20 @@ const generateIV = (counter: number) => {
 	return new Uint8Array(iv)
 }
 
-export const makeNoiseHandler = ({ public: publicKey, private: privateKey }: KeyPair) => {
+export const makeNoiseHandler = (
+	{ public: publicKey, private: privateKey }: KeyPair,
+	logger: Logger
+) => {
+	logger = logger.child({ class: 'ns' })
 
 	const authenticate = (data: Uint8Array) => {
 		if(!isFinished) {
-			hash = sha256(Buffer.from(Binary.build(hash, data).readByteArray()))
+			hash = sha256(Buffer.concat([hash, data]))
 		}
 	}
 
 	const encrypt = (plaintext: Uint8Array) => {
-		const authTagLength = 128 >> 3
-		const cipher = createCipheriv('aes-256-gcm', encKey, generateIV(writeCounter), { authTagLength })
-		cipher.setAAD(hash)
-
-		const result = Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()])
+		const result = aesEncryptGCM(plaintext, encKey, generateIV(writeCounter), hash)
 
 		writeCounter += 1
 
@@ -39,16 +38,7 @@ export const makeNoiseHandler = ({ public: publicKey, private: privateKey }: Key
 		// before the handshake is finished, we use the same counter
 		// after handshake, the counters are different
 		const iv = generateIV(isFinished ? readCounter : writeCounter)
-		const cipher = createDecipheriv('aes-256-gcm', decKey, iv)
-		// decrypt additional adata
-		const tagLength = 128 >> 3
-		const enc = ciphertext.slice(0, ciphertext.length - tagLength)
-		const tag = ciphertext.slice(ciphertext.length - tagLength)
-		// set additional data
-		cipher.setAAD(hash)
-		cipher.setAuthTag(tag)
-
-		const result = Buffer.concat([cipher.update(enc), cipher.final()])
+		const result = aesDecryptGCM(ciphertext, decKey, iv, hash)
 
 		if(isFinished) {
 			readCounter += 1
@@ -84,7 +74,7 @@ export const makeNoiseHandler = ({ public: publicKey, private: privateKey }: Key
 		isFinished = true
 	}
 
-	const data = Binary.build(NOISE_MODE).readBuffer()
+	const data = Buffer.from(NOISE_MODE)
 	let hash = Buffer.from(data.byteLength === 32 ? data : sha256(Buffer.from(data)))
 	let salt = hash
 	let encKey = hash
@@ -94,8 +84,7 @@ export const makeNoiseHandler = ({ public: publicKey, private: privateKey }: Key
 	let isFinished = false
 	let sentIntro = false
 
-	const outBinary = new Binary()
-	const inBinary = new Binary()
+	let inBytes = Buffer.alloc(0)
 
 	authenticate(NOISE_WA_HEADER)
 	authenticate(publicKey)
@@ -108,17 +97,17 @@ export const makeNoiseHandler = ({ public: publicKey, private: privateKey }: Key
 		finishInit,
 		processHandshake: ({ serverHello }: proto.HandshakeMessage, noiseKey: KeyPair) => {
 			authenticate(serverHello!.ephemeral!)
-			mixIntoKey(Curve.sharedKey(privateKey, serverHello.ephemeral!))
+			mixIntoKey(Curve.sharedKey(privateKey, serverHello!.ephemeral!))
 
 			const decStaticContent = decrypt(serverHello!.static!)
 			mixIntoKey(Curve.sharedKey(privateKey, decStaticContent))
 
 			const certDecoded = decrypt(serverHello!.payload!)
-			const { details: certDetails, signature: certSignature } = proto.NoiseCertificate.decode(certDecoded)
+			const { intermediate: certIntermediate } = proto.CertChain.decode(certDecoded)
 
-			const { key: certKey } = proto.NoiseCertificateDetails.decode(certDetails)
+			const { issuerSerial } = proto.CertChainNoiseCertificateDetails.decode(certIntermediate!.details!)
 
-			if(Buffer.compare(decStaticContent, certKey) !== 0) {
+			if(issuerSerial !== WA_CERT_DETAILS.SERIAL) {
 				throw new Boom('certification match failed', { statusCode: 400 })
 			}
 
@@ -133,47 +122,48 @@ export const makeNoiseHandler = ({ public: publicKey, private: privateKey }: Key
 			}
 
 			const introSize = sentIntro ? 0 : NOISE_WA_HEADER.length
-
-			outBinary.ensureAdditionalCapacity(introSize + 3 + data.byteLength)
+			const frame = Buffer.alloc(introSize + 3 + data.byteLength)
 
 			if(!sentIntro) {
-				outBinary.writeByteArray(NOISE_WA_HEADER)
+				frame.set(NOISE_WA_HEADER)
 				sentIntro = true
 			}
 
-			outBinary.writeUint8(data.byteLength >> 16)
-			outBinary.writeUint16(65535 & data.byteLength)
-			outBinary.write(data)
+			frame.writeUInt8(data.byteLength >> 16, introSize)
+			frame.writeUInt16BE(65535 & data.byteLength, introSize + 1)
+			frame.set(data, introSize + 3)
 
-			const bytes = outBinary.readByteArray()
-			return bytes as Uint8Array
+			return frame
 		},
 		decodeFrame: (newData: Buffer | Uint8Array, onFrame: (buff: Uint8Array | BinaryNode) => void) => {
 			// the binary protocol uses its own framing mechanism
 			// on top of the WS frames
 			// so we get this data and separate out the frames
 			const getBytesSize = () => {
-				return (inBinary.readUint8() << 16) | inBinary.readUint16()
+				if(inBytes.length >= 3) {
+					return (inBytes.readUInt8() << 16) | inBytes.readUInt16BE(1)
+				}
 			}
 
-			const peekSize = () => {
-				return !(inBinary.size() < 3) && getBytesSize() <= inBinary.size()
-			}
+			inBytes = Buffer.concat([ inBytes, newData ])
 
-			inBinary.writeByteArray(newData)
-			while(inBinary.peek(peekSize)) {
-				const bytes = getBytesSize()
-				let frame: Uint8Array | BinaryNode = inBinary.readByteArray(bytes)
+			logger.trace(`recv ${newData.length} bytes, total recv ${inBytes.length} bytes`)
+
+			let size = getBytesSize()
+			while(size && inBytes.length >= size + 3) {
+				let frame: Uint8Array | BinaryNode = inBytes.slice(3, size + 3)
+				inBytes = inBytes.slice(size + 3)
+
 				if(isFinished) {
 					const result = decrypt(frame as Uint8Array)
-					const unpacked = new Binary(result).decompressed()
-					frame = decodeBinaryNode(unpacked)
+					frame = decodeBinaryNode(result)
 				}
 
-				onFrame(frame)
-			}
+				logger.trace({ msg: (frame as any)?.attrs?.id }, 'recv frame')
 
-			inBinary.peek(peekSize)
+				onFrame(frame)
+				size = getBytesSize()
+			}
 		}
 	}
 }

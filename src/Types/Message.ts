@@ -22,9 +22,9 @@ export type WAMediaUpload = Buffer | { url: URL | string } | { stream: Readable 
 /** Set of message types that are supported by the library */
 export type MessageType = keyof proto.Message
 
-export type DownloadableMessage = { mediaKey?: Uint8Array, directPath?: string, url?: string }
+export type DownloadableMessage = { mediaKey?: Uint8Array | null, directPath?: string | null, url?: string | null }
 
-export type MessageReceiptType = 'read' | 'read-self' | 'hist_sync' | 'peer_msg' | 'sender' | undefined
+export type MessageReceiptType = 'read' | 'read-self' | 'hist_sync' | 'peer_msg' | 'sender' | 'inactive' | undefined
 
 export type MediaConnInfo = {
     auth: string
@@ -37,7 +37,7 @@ export interface WAUrlInfo {
     'canonical-url': string
     'matched-text': string
     title: string
-    description: string
+    description?: string
     jpegThumbnail?: Buffer
 }
 
@@ -93,6 +93,7 @@ export type AnyMediaMessageContent = (
         seconds?: number
     } | ({
         sticker: WAMediaUpload
+        isAnimated?: boolean
     } & WithDimensions) | ({
         document: WAMediaUpload
         mimetype: string
@@ -100,9 +101,16 @@ export type AnyMediaMessageContent = (
     } & Buttonable & Templatable)) &
     { mimetype?: string }
 
+export type ButtonReplyInfo = {
+    displayText: string
+    id: string
+    index: number
+}
+
 export type AnyRegularMessageContent = (
     ({
 	    text: string
+        linkPreview?: WAUrlInfo | null
     }
     & Mentionable & Buttonable & Templatable & Listable) |
     AnyMediaMessageContent |
@@ -116,6 +124,9 @@ export type AnyRegularMessageContent = (
         location: WALocationMessage
     } | {
         react: proto.IReactionMessage
+    } | {
+        buttonReply: ButtonReplyInfo
+        type: 'template' | 'plain'
     }
 ) & ViewOnce
 
@@ -128,25 +139,32 @@ export type AnyMessageContent = AnyRegularMessageContent | {
 	disappearingMessagesInChat: boolean | number
 }
 
-export type MessageRelayOptions = {
+export type GroupMetadataParticipants = Pick<GroupMetadata, 'participants'>
+
+type MinimalRelayOptions = {
+    /** override the message ID with a custom provided string */
     messageId?: string
-    /** only send to a specific participant */
-    participant?: string
-    additionalAttributes?: { [_: string]: string }
-    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>
-    //cachedDevices?: (jid: string) => Promise<string[] | undefined>
+    /** cached group metadata, use to prevent redundant requests to WA & speed up msg sending */
+    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadataParticipants | undefined>
 }
 
-export type MiscMessageGenerationOptions = {
-    /** Force message id */
-    messageId?: string
+export type MessageRelayOptions = MinimalRelayOptions & {
+    /** only send to a specific participant; used when a message decryption fails for a single user */
+    participant?: { jid: string, count: number }
+    /** additional attributes to add to the WA binary node */
+    additionalAttributes?: { [_: string]: string }
+    /** should we use the devices cache, or fetch afresh from the server; default assumed to be "true" */
+    useUserDevicesCache?: boolean
+}
+
+export type MiscMessageGenerationOptions = MinimalRelayOptions & {
     /** optional, if you want to manually set the timestamp of the message */
 	timestamp?: Date
     /** the message you want to quote */
 	quoted?: WAMessage
     /** disappearing messages settings */
     ephemeralExpiration?: number | string
-
+    /** timeout for media upload to WA server */
     mediaUploadTimeoutMs?: number
 }
 export type MessageGenerationOptionsFromContent = MiscMessageGenerationOptions & {
@@ -164,11 +182,16 @@ export type MediaGenerationOptions = {
     mediaUploadTimeoutMs?: number
 }
 export type MessageContentGenerationOptions = MediaGenerationOptions & {
-	getUrlInfo?: (text: string) => Promise<WAUrlInfo>
+	getUrlInfo?: (text: string) => Promise<WAUrlInfo | undefined>
 }
 export type MessageGenerationOptions = MessageContentGenerationOptions & MessageGenerationOptionsFromContent
 
-export type MessageUpdateType = 'append' | 'notify' | 'replace'
+/**
+ * Type of message upsert
+ * 1. notify => notify the user, this message was just received
+ * 2. append => append the message to the chat history, no notification required
+ */
+export type MessageUpsertType = 'append' | 'notify'
 
 export type MessageUserReceipt = proto.IUserReceipt
 
@@ -177,3 +200,11 @@ export type WAMessageUpdate = { update: Partial<WAMessage>, key: proto.IMessageK
 export type WAMessageCursor = { before: WAMessageKey | undefined } | { after: WAMessageKey | undefined }
 
 export type MessageUserReceiptUpdate = { key: proto.IMessageKey, receipt: MessageUserReceipt }
+
+export type MediaDecryptionKeyInfo = {
+    iv: Buffer
+    cipherKey: Buffer
+    macKey?: Buffer
+}
+
+export type MinimalMessage = Pick<proto.IWebMessageInfo, 'key' | 'messageTimestamp'>

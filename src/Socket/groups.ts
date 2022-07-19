@@ -1,12 +1,12 @@
-import { GroupMetadata, ParticipantAction, SocketConfig } from '../Types'
-import { generateMessageID } from '../Utils'
-import { BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, jidEncode, jidNormalizedUser } from '../WABinary'
-import { makeSocket } from './socket'
 import { proto } from '../../WAProto'
+import { GroupMetadata, ParticipantAction, SocketConfig, WAMessageKey, WAMessageStubType } from '../Types'
+import { generateMessageID, unixTimestampSeconds } from '../Utils'
+import { BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, jidEncode, jidNormalizedUser } from '../WABinary'
+import { makeChatsSocket } from './chats'
 
 export const makeGroupsSocket = (config: SocketConfig) => {
-	const sock = makeSocket(config)
-	const { query } = sock
+	const sock = makeChatsSocket(config)
+	const { authState, ev, query, upsertMessage } = sock
 
 	const groupQuery = async(jid: string, type: 'get' | 'set', content: BinaryNode[]) => (
 		query({
@@ -89,17 +89,22 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 			const result = await groupQuery(
 				jid,
 				'set',
-				participants.map(
-					jid => ({
+				[
+					{
 						tag: action,
 						attrs: { },
-						content: [{ tag: 'participant', attrs: { jid } }]
-					})
-				)
+						content: participants.map(jid => ({
+							tag: 'participant',
+							attrs: { jid }
+						}))
+					}
+				]
 			)
 			const node = getBinaryNodeChild(result, action)
 			const participantsAffected = getBinaryNodeChildren(node!, 'participant')
-			return participantsAffected.map(p => p.attrs.jid)
+			return participantsAffected.map(p => {
+				return { status: p.attrs.error || '200', jid: p.attrs.jid }
+			})
 		},
 		groupUpdateDescription: async(jid: string, description?: string) => {
 			const metadata = await groupMetadata(jid)
@@ -115,7 +120,9 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 							...(description ? { id: generateMessageID() } : { delete: 'true' }),
 							...(prev ? { prev } : {})
 						},
-						content: description ? [{ tag: 'body', attrs: {}, content: Buffer.from(description, 'utf-8') }] : null
+						content: description ? [
+							{ tag: 'body', attrs: {}, content: Buffer.from(description, 'utf-8') }
+						] : undefined
 					}
 				]
 			)
@@ -123,24 +130,82 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 		groupInviteCode: async(jid: string) => {
 			const result = await groupQuery(jid, 'get', [{ tag: 'invite', attrs: {} }])
 			const inviteNode = getBinaryNodeChild(result, 'invite')
-			return inviteNode.attrs.code
+			return inviteNode?.attrs.code
 		},
 		groupRevokeInvite: async(jid: string) => {
 			const result = await groupQuery(jid, 'set', [{ tag: 'invite', attrs: {} }])
 			const inviteNode = getBinaryNodeChild(result, 'invite')
-			return inviteNode.attrs.code
+			return inviteNode?.attrs.code
 		},
 		groupAcceptInvite: async(code: string) => {
 			const results = await groupQuery('@g.us', 'set', [{ tag: 'invite', attrs: { code } }])
 			const result = getBinaryNodeChild(results, 'group')
-			return result.attrs.jid
+			return result?.attrs.jid
 		},
-		groupAcceptInviteV4: async(jid: string, inviteMessage: proto.IGroupInviteMessage) => {
-			const results = await groupQuery(inviteMessage.groupJid, 'set', [{ tag: 'accept', attrs: {
-					code: inviteMessage.inviteCode,
-					expiration: inviteMessage.inviteExpiration.toString(),
-					admin: jid} }])
-			return results.attrs.from;
+		/**
+		 * accept a GroupInviteMessage
+		 * @param key the key of the invite message, or optionally only provide the jid of the person who sent the invite
+		 * @param inviteMessage the message to accept
+		 */
+		groupAcceptInviteV4: async(key: string | WAMessageKey, inviteMessage: proto.IGroupInviteMessage) => {
+			key = typeof key === 'string' ? { remoteJid: key } : key
+			const results = await groupQuery(inviteMessage.groupJid!, 'set', [{
+				tag: 'accept',
+				attrs: {
+					code: inviteMessage.inviteCode!,
+					expiration: inviteMessage.inviteExpiration!.toString(),
+					admin: key.remoteJid!
+				}
+			}])
+
+			const started = ev.buffer()
+			// if we have the full message key
+			// update the invite message to be expired
+			if(key.id) {
+				// create new invite message that is expired
+				inviteMessage = proto.GroupInviteMessage.fromObject(inviteMessage)
+				inviteMessage.inviteExpiration = 0
+				inviteMessage.inviteCode = ''
+				ev.emit('messages.update', [
+					{
+						key,
+						update: {
+							message: {
+								groupInviteMessage: inviteMessage
+							}
+						}
+					}
+				])
+			}
+
+			// generate the group add message
+			await upsertMessage(
+				{
+					key: {
+						remoteJid: inviteMessage.groupJid,
+						id: generateMessageID(),
+						fromMe: false,
+						participant: key.remoteJid,
+					},
+					messageStubType: WAMessageStubType.GROUP_PARTICIPANT_ADD,
+					messageStubParameters: [
+						authState.creds.me!.id
+					],
+					participant: key.remoteJid,
+					messageTimestamp: unixTimestampSeconds()
+				},
+				'notify'
+			)
+
+			if(started) {
+				await ev.flush()
+			}
+
+			return results.attrs.from
+		},
+		groupGetInviteInfo: async(code: string) => {
+			const results = await groupQuery('@g.us', 'get', [{ tag: 'invite', attrs: { code } }])
+			return extractGroupMetadata(results)
 		},
 		groupToggleEphemeral: async(jid: string, ephemeralExpiration: number) => {
 			const content: BinaryNode = ephemeralExpiration ?
@@ -191,7 +256,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 
 
 export const extractGroupMetadata = (result: BinaryNode) => {
-	const group = getBinaryNodeChild(result, 'group')
+	const group = getBinaryNodeChild(result, 'group')!
 	const descChild = getBinaryNodeChild(group, 'description')
 	let desc: string | undefined
 	let descId: string | undefined
@@ -205,6 +270,9 @@ export const extractGroupMetadata = (result: BinaryNode) => {
 	const metadata: GroupMetadata = {
 		id: groupId,
 		subject: group.attrs.subject,
+		subjectOwner: group.attrs.s_o,
+		subjectTime: +group.attrs.s_t,
+		size: +group.attrs.size,
 		creation: +group.attrs.creation,
 		owner: group.attrs.creator ? jidNormalizedUser(group.attrs.creator) : undefined,
 		desc,

@@ -1,17 +1,11 @@
 import * as libsignal from 'libsignal'
 import { proto } from '../../WAProto'
 import { GroupCipher, GroupSessionBuilder, SenderKeyDistributionMessage, SenderKeyName, SenderKeyRecord } from '../../WASignalGroup'
-import { AuthenticationCreds, KeyPair, SignalAuthState, SignalIdentity, SignalKeyStore, SignedKeyPair } from '../Types/Auth'
-import { assertNodeErrorFree, BinaryNode, getBinaryNodeChild, getBinaryNodeChildBuffer, getBinaryNodeChildren, getBinaryNodeChildUInt, jidDecode, JidWithDevice } from '../WABinary'
-import { Curve } from './crypto'
+import { KEY_BUNDLE_TYPE } from '../Defaults'
+import { AuthenticationCreds, AuthenticationState, KeyPair, SignalAuthState, SignalIdentity, SignalKeyStore, SignedKeyPair } from '../Types/Auth'
+import { assertNodeErrorFree, BinaryNode, getBinaryNodeChild, getBinaryNodeChildBuffer, getBinaryNodeChildren, getBinaryNodeChildUInt, jidDecode, JidWithDevice, S_WHATSAPP_NET } from '../WABinary'
+import { Curve, generateSignalPubKey } from './crypto'
 import { encodeBigEndian } from './generics'
-
-export const generateSignalPubKey = (pubKey: Uint8Array | Buffer) => {
-	const newPub = Buffer.alloc(33)
-	newPub.set([5], 0)
-	newPub.set(pubKey, 1)
-	return newPub
-}
 
 const jidToSignalAddress = (jid: string) => jid.split('@')[0]
 
@@ -59,7 +53,6 @@ export const generateOrGetPreKeys = (creds: AuthenticationCreds, range: number) 
 		preKeysRange: [creds.firstUnuploadedPreKeyId, range] as const,
 	}
 }
-
 
 export const xmppSignedPreKey = (key: SignedKeyPair): BinaryNode => (
 	{
@@ -149,7 +142,7 @@ export const processSenderKeyMessage = async(
 	auth: SignalAuthState
 ) => {
 	const builder = new GroupSessionBuilder(signalStorage(auth))
-	const senderName = jidToSignalSenderKeyName(item.groupId, authorJid)
+	const senderName = jidToSignalSenderKeyName(item.groupId!, authorJid)
 
 	const senderMsg = new SenderKeyDistributionMessage(null, null, null, null, item.axolotlSenderKeyDistributionMessage)
 	const { [senderName]: senderKey } = await auth.keys.get('sender-key', [senderName])
@@ -182,11 +175,9 @@ export const encryptSignalProto = async(user: string, buffer: Buffer, auth: Sign
 	const addr = jidToSignalProtocolAddress(user)
 	const cipher = new libsignal.SessionCipher(signalStorage(auth), addr)
 
-	const { type, body } = await cipher.encrypt(buffer)
-	return {
-		type: type === 3 ? 'pkmsg' : 'msg',
-		ciphertext: Buffer.from(body, 'binary')
-	}
+	const { type: sigType, body } = await cipher.encrypt(buffer)
+	const type = sigType === 3 ? 'pkmsg' : 'msg'
+	return { type, ciphertext: Buffer.from(body, 'binary') }
 }
 
 export const encryptSenderKeyMsgSignalProto = async(group: string, data: Uint8Array | Buffer, meId: string, auth: SignalAuthState) => {
@@ -212,9 +203,7 @@ export const parseAndInjectE2ESessions = async(node: BinaryNode, auth: SignalAut
 	const extractKey = (key: BinaryNode) => (
 		key ? ({
 			keyId: getBinaryNodeChildUInt(key, 'id', 3),
-			publicKey: generateSignalPubKey(
-				getBinaryNodeChildBuffer(key, 'value')
-			),
+			publicKey: generateSignalPubKey(getBinaryNodeChildBuffer(key, 'value')!),
 			signature: getBinaryNodeChildBuffer(key, 'signature'),
 		}) : undefined
 	)
@@ -226,9 +215,9 @@ export const parseAndInjectE2ESessions = async(node: BinaryNode, auth: SignalAut
 	await Promise.all(
 		nodes.map(
 			async node => {
-				const signedKey = getBinaryNodeChild(node, 'skey')
-				const key = getBinaryNodeChild(node, 'key')
-				const identity = getBinaryNodeChildBuffer(node, 'identity')
+				const signedKey = getBinaryNodeChild(node, 'skey')!
+				const key = getBinaryNodeChild(node, 'key')!
+				const identity = getBinaryNodeChildBuffer(node, 'identity')!
 				const jid = node.attrs.jid
 				const registrationId = getBinaryNodeChildUInt(node, 'registration', 4)
 
@@ -246,13 +235,13 @@ export const parseAndInjectE2ESessions = async(node: BinaryNode, auth: SignalAut
 }
 
 export const extractDeviceJids = (result: BinaryNode, myJid: string, excludeZeroDevices: boolean) => {
-	const { user: myUser, device: myDevice } = jidDecode(myJid)
+	const { user: myUser, device: myDevice } = jidDecode(myJid)!
 	const extracted: JidWithDevice[] = []
 	for(const node of result.content as BinaryNode[]) {
 		const list = getBinaryNodeChild(node, 'list')?.content
 		if(list && Array.isArray(list)) {
 			for(const item of list) {
-				const { user } = jidDecode(item.attrs.jid)
+				const { user } = jidDecode(item.attrs.jid)!
 				const devicesNode = getBinaryNodeChild(item, 'devices')
 				const deviceListNode = getBinaryNodeChild(devicesNode, 'device-list')
 				if(Array.isArray(deviceListNode?.content)) {
@@ -273,4 +262,46 @@ export const extractDeviceJids = (result: BinaryNode, myJid: string, excludeZero
 	}
 
 	return extracted
+}
+
+/**
+ * get the next N keys for upload or processing
+ * @param count number of pre-keys to get or generate
+ */
+export const getNextPreKeys = async({ creds, keys }: AuthenticationState, count: number) => {
+	const { newPreKeys, lastPreKeyId, preKeysRange } = generateOrGetPreKeys(creds, count)
+
+	const update: Partial<AuthenticationCreds> = {
+		nextPreKeyId: Math.max(lastPreKeyId + 1, creds.nextPreKeyId),
+		firstUnuploadedPreKeyId: Math.max(creds.firstUnuploadedPreKeyId, lastPreKeyId + 1)
+	}
+
+	await keys.set({ 'pre-key': newPreKeys })
+
+	const preKeys = await getPreKeys(keys, preKeysRange[0], preKeysRange[0] + preKeysRange[1])
+
+	return { update, preKeys }
+}
+
+export const getNextPreKeysNode = async(state: AuthenticationState, count: number) => {
+	const { creds } = state
+	const { update, preKeys } = await getNextPreKeys(state, count)
+
+	const node: BinaryNode = {
+		tag: 'iq',
+		attrs: {
+			xmlns: 'encrypt',
+			type: 'set',
+			to: S_WHATSAPP_NET,
+		},
+		content: [
+			{ tag: 'registration', attrs: { }, content: encodeBigEndian(creds.registrationId) },
+			{ tag: 'type', attrs: { }, content: KEY_BUNDLE_TYPE },
+			{ tag: 'identity', attrs: { }, content: creds.signedIdentityKey.public },
+			{ tag: 'list', attrs: { }, content: Object.keys(preKeys).map(k => xmppPreKey(preKeys[+k], +k)) },
+			xmppSignedPreKey(creds.signedPreKey)
+		]
+	}
+
+	return { update, node }
 }
