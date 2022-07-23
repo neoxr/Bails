@@ -139,8 +139,8 @@ export async function promiseTimeout<T>(ms: number | undefined, promise: (resolv
 	const { delay, cancel } = delayCancellable (ms)
 	const p = new Promise ((resolve, reject) => {
 		delay
-			.then(err => reject(err))
-			.catch (err => reject(err))
+			.then(err => reject(1))
+			.catch (err => reject(1))
 
 		promise (resolve, reject)
 	})
