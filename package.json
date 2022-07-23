@@ -1,5 +1,5 @@
 {
-  "name": "@adiwajshing/baileys",
+  "name": "@neoxr/Bails",
   "version": "4.3.0",
   "description": "WhatsApp API",
   "homepage": "https://github.com/adiwajshing/Baileys",
@@ -32,7 +32,7 @@
   "author": "Adhiraj Singh",
   "license": "MIT",
   "repository": {
-    "url": "git@github.com:adiwajshing/baileys.git"
+    "url": "git@github.com:neoxr/Bails.git"
   },
   "dependencies": {
     "@hapi/boom": "^9.1.3",
