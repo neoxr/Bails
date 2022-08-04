@@ -123,7 +123,14 @@ export const delayCancellable = (ms: number) => {
 	})
 	const cancel = () => {
 		clearTimeout (timeout)
-		
+		reject(
+			new Boom('Cancelled', {
+				statusCode: 500,
+				data: {
+					stack
+				}
+			})
+		)
 	}
 
 	return { delay, cancel }
@@ -139,8 +146,15 @@ export async function promiseTimeout<T>(ms: number | undefined, promise: (resolv
 	const { delay, cancel } = delayCancellable (ms)
 	const p = new Promise ((resolve, reject) => {
 		delay
-			.then(err => reject(1))
-			.catch (err => reject(1))
+			.then(() => reject(
+				new Boom('Timed Out', {
+					statusCode: DisconnectReason.timedOut,
+					data: {
+						stack
+					}
+				})
+			))
+			.catch (err => reject(err))
 
 		promise (resolve, reject)
 	})
@@ -248,10 +262,10 @@ export const generateMdTagPrefix = () => {
 	return `${bytes.readUInt16BE()}.${bytes.readUInt16BE(2)}-`
 }
 
-const STATUS_MAP: { [_: string]: proto.WebMessageInfo.WebMessageInfoStatus } = {
-	'played': proto.WebMessageInfo.WebMessageInfoStatus.PLAYED,
-	'read': proto.WebMessageInfo.WebMessageInfoStatus.READ,
-	'read-self': proto.WebMessageInfo.WebMessageInfoStatus.READ
+const STATUS_MAP: { [_: string]: proto.WebMessageInfo.Status } = {
+	'played': proto.WebMessageInfo.Status.PLAYED,
+	'read': proto.WebMessageInfo.Status.READ,
+	'read-self': proto.WebMessageInfo.Status.READ
 }
 /**
  * Given a type of receipt, returns what the new status of the message should be
@@ -260,7 +274,7 @@ const STATUS_MAP: { [_: string]: proto.WebMessageInfo.WebMessageInfoStatus } = {
 export const getStatusFromReceiptType = (type: string | undefined) => {
 	const status = STATUS_MAP[type!]
 	if(typeof type === 'undefined') {
-		return proto.WebMessageInfo.WebMessageInfoStatus.DELIVERY_ACK
+		return proto.WebMessageInfo.Status.DELIVERY_ACK
 	}
 
 	return status
@@ -332,4 +346,12 @@ export const getCodeFromWSError = (error: Error) => {
 	}
 
 	return statusCode
+}
+
+/**
+ * Is the given platform WA business
+ * @param platform AuthenticationCreds.platform
+ */
+export const isWABusinessPlatform = (platform: string) => {
+	return platform === 'smbi' || platform === 'smba'
 }

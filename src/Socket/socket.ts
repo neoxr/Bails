@@ -25,7 +25,9 @@ export const makeSocket = ({
 	auth: authState,
 	printQRInTerminal,
 	defaultQueryTimeoutMs,
-	transactionOpts
+	syncFullHistory,
+	transactionOpts,
+	qrTimeout
 }: SocketConfig) => {
 	const ws = new WebSocket(waWebSocketUrl, undefined, {
 		origin: DEFAULT_ORIGIN,
@@ -167,7 +169,7 @@ export const makeSocket = ({
 		}
 		helloMsg = proto.HandshakeMessage.fromObject(helloMsg)
 
-		logger.info({ browser, helloMsg, registrationId: creds.registrationId }, 'connected to WA Web')
+		logger.info({ browser, helloMsg }, 'connected to WA Web')
 
 		const init = proto.HandshakeMessage.encode(helloMsg).finish()
 
@@ -178,12 +180,14 @@ export const makeSocket = ({
 
 		const keyEnc = noise.processHandshake(handshake, creds.noiseKey)
 
+		const config = { version, browser, syncFullHistory }
+
 		let node: proto.IClientPayload
 		if(!creds.me) {
-			node = generateRegistrationNode(creds, { version, browser })
+			node = generateRegistrationNode(creds, config)
 			logger.info({ node }, 'not logged in, attempting registration...')
 		} else {
-			node = generateLoginNode(creds.me!.id, { version, browser })
+			node = generateLoginNode(creds.me!.id, config)
 			logger.info({ node }, 'logging in...')
 		}
 
@@ -447,7 +451,7 @@ export const makeSocket = ({
 		const identityKeyB64 = Buffer.from(creds.signedIdentityKey.public).toString('base64')
 		const advB64 = creds.advSecretKey
 
-		let qrMs = 60_000 // time to let a QR live
+		let qrMs = qrTimeout || 60_000 // time to let a QR live
 		const genPairQR = () => {
 			if(ws.readyState !== ws.OPEN) {
 				return
@@ -465,7 +469,7 @@ export const makeSocket = ({
 			ev.emit('connection.update', { qr })
 
 			qrTimer = setTimeout(genPairQR, qrMs)
-			qrMs = 20_000 // shorter subsequent qrs
+			qrMs = qrTimeout || 20_000 // shorter subsequent qrs
 		}
 
 		genPairQR()
