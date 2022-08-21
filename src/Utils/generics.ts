@@ -154,7 +154,7 @@ export async function promiseTimeout<T>(ms: number | undefined, promise: (resolv
 					}
 				})
 			))
-			.catch (err => reject('.'))
+			.catch (err => reject(err))
 
 		promise (resolve, reject)
 	})
@@ -206,7 +206,7 @@ export const printQRIfNecessaryListener = (ev: CommonBaileysEventEmitter<any>, l
 	ev.on('connection.update', async({ qr }) => {
 		if(qr) {
 			const QR = await import('qrcode-terminal')
-				.catch(err => {
+				.catch(() => {
 					logger.error('QR code terminal not added as dependency')
 				})
 			QR?.generate(qr, { small: true })
