@@ -748,7 +748,7 @@ const generateContextInfo = () => {
 export const patchMessageForMdIfRequired = (message: proto.IMessage) => {
 	const requiresPatch = !!(
 		message.buttonsMessage
-		// || message.templateMessage
+		|| message.templateMessage
 		|| message.listMessage
 	)
 	if(requiresPatch) {
