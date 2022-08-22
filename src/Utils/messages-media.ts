@@ -561,6 +561,8 @@ export const getWAUploadToServer = ({ customUploadHosts, fetchAgent, logger }: C
 	}
 }
 
+const GCM_AUTH_TAG_LENGTH: number | undefined = 128 >> 3
+
 const getMediaRetryKey = (mediaKey: Buffer | Uint8Array) => {
 	return hkdf(mediaKey, 32, { info: 'WhatsApp Media Retry Notification' })
 }

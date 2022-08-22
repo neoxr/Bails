@@ -101,7 +101,7 @@ export const signalStorage = ({ creds, keys }: SignalAuthState) => ({
 		}
 	},
 	removePreKey: (id: number) => keys.set({ 'pre-key': { [id]: null } }),
-	loadSignedPreKey: () => {
+	loadSignedPreKey: (keyId: number) => {
 		const key = creds.signedPreKey
 		return {
 			privKey: Buffer.from(key.keyPair.private),

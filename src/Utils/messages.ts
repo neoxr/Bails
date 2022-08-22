@@ -702,12 +702,12 @@ export const downloadMediaMessage = async(
 
 		const stream = await downloadContentFromMessage(media, mediaType, options)
 		if(type === 'buffer') {
-			const bufferArray: Buffer[] = []
+			let buffer = Buffer.from([])
 			for await (const chunk of stream) {
-				bufferArray.push(chunk)
+				buffer = Buffer.concat([buffer, chunk])
 			}
 
-			return Buffer.concat(bufferArray)
+			return buffer
 		}
 
 		return stream
@@ -748,7 +748,7 @@ const generateContextInfo = () => {
 export const patchMessageForMdIfRequired = (message: proto.IMessage) => {
 	const requiresPatch = !!(
 		message.buttonsMessage
-		|| message.templateMessage
+		// || message.templateMessage
 		|| message.listMessage
 	)
 	if(requiresPatch) {

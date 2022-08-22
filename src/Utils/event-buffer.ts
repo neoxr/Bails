@@ -40,8 +40,6 @@ type BaileysBufferableEventEmitter = BaileysEventEmitter & {
 	 * @returns true if buffering just started, false if it was already buffering
 	 * */
 	buffer(): boolean
-	/** buffers all events till the promise completes */
-	createBufferedFunction<A extends any[], T>(work: (...args: A) => Promise<T>): ((...args: A) => Promise<T>)
 	/** flushes all buffered events */
 	flush(): Promise<void>
 	/** waits for the task to complete, before releasing the buffer */
@@ -68,36 +66,6 @@ export const makeEventBuffer = (logger: Logger): BaileysBufferableEventEmitter =
 		}
 	})
 
-	function buffer() {
-		if(!isBuffering) {
-			logger.trace('buffering events')
-			isBuffering = true
-			return true
-		}
-
-		return false
-	}
-
-	async function flush() {
-		if(!isBuffering) {
-			return
-		}
-
-		logger.trace('releasing buffered events...')
-		await preBufferTask
-
-		isBuffering = false
-
-		const consolidatedData = consolidateEvents(data)
-		if(Object.keys(consolidatedData).length) {
-			ev.emit('event', consolidatedData)
-		}
-
-		data = makeBufferData()
-
-		logger.trace('released buffered events')
-	}
-
 	return {
 		process(handler) {
 			const listener = (map: BaileysEventData) => {
@@ -122,20 +90,33 @@ export const makeEventBuffer = (logger: Logger): BaileysBufferableEventEmitter =
 				preBufferTask = Promise.allSettled([ preBufferTask, task ])
 			}
 		},
-		buffer,
-		flush,
-		createBufferedFunction(work) {
-			return async(...args) => {
-				const started = buffer()
-				try {
-					const result = await work(...args)
-					return result
-				} finally {
-					if(started) {
-						await flush()
-					}
-				}
+		buffer() {
+			if(!isBuffering) {
+				logger.trace('buffering events')
+				isBuffering = true
+				return true
 			}
+
+			return false
+		},
+		async flush() {
+			if(!isBuffering) {
+				return
+			}
+
+			logger.trace('releasing buffered events...')
+			await preBufferTask
+
+			isBuffering = false
+
+			const consolidatedData = consolidateEvents(data)
+			if(Object.keys(consolidatedData).length) {
+				ev.emit('event', consolidatedData)
+			}
+
+			data = makeBufferData()
+
+			logger.trace('released buffered events')
 		},
 		on: (...args) => ev.on(...args),
 		off: (...args) => ev.off(...args),
