@@ -433,6 +433,11 @@ export const generateWAMessageContent = async(
 		m[messageType].contextInfo.mentionedJid = message.mentions
 	}
 
+	if('contextInfo' in message && message) {
+		const [messageType] = Object.keys(m)
+		m[messageType].contextInfo = message.contextInfo
+	}
+
 	return WAProto.Message.fromObject(m)
 }
 
@@ -702,12 +707,12 @@ export const downloadMediaMessage = async(
 
 		const stream = await downloadContentFromMessage(media, mediaType, options)
 		if(type === 'buffer') {
-			let buffer = Buffer.from([])
+			const bufferArray: Buffer[] = []
 			for await (const chunk of stream) {
-				buffer = Buffer.concat([buffer, chunk])
+				bufferArray.push(chunk)
 			}
 
-			return buffer
+			return Buffer.concat(bufferArray)
 		}
 
 		return stream
@@ -748,7 +753,7 @@ const generateContextInfo = () => {
 export const patchMessageForMdIfRequired = (message: proto.IMessage) => {
 	const requiresPatch = !!(
 		message.buttonsMessage
-		|| message.templateMessage
+	    || message.templateMessage
 		|| message.listMessage
 	)
 	if(requiresPatch) {
