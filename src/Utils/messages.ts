@@ -340,18 +340,6 @@ export const generateWAMessageContent = async(
 			}
 			break
 		}
-	} else if('product' in message) {
-		const { imageMessage } = await prepareWAMessageMedia(
-			{ image: message.product.productImage },
-			options
-		)
-		m.productMessage = WAProto.Message.ProductMessage.fromObject({
-			...message,
-			product: {
-				...message.product,
-				productImage: imageMessage,
-			}
-		})
 	} else {
 		m = await prepareWAMessageMedia(
 			message,
@@ -431,11 +419,6 @@ export const generateWAMessageContent = async(
 		const [messageType] = Object.keys(m)
 		m[messageType].contextInfo = m[messageType] || { }
 		m[messageType].contextInfo.mentionedJid = message.mentions
-	}
-
-	if('contextInfo' in message && message) {
-		const [messageType] = Object.keys(m)
-		m[messageType].contextInfo = message.contextInfo
 	}
 
 	return WAProto.Message.fromObject(m)
@@ -707,12 +690,12 @@ export const downloadMediaMessage = async(
 
 		const stream = await downloadContentFromMessage(media, mediaType, options)
 		if(type === 'buffer') {
-			const bufferArray: Buffer[] = []
+			let buffer = Buffer.from([])
 			for await (const chunk of stream) {
-				bufferArray.push(chunk)
+				buffer = Buffer.concat([buffer, chunk])
 			}
 
-			return Buffer.concat(bufferArray)
+			return buffer
 		}
 
 		return stream
@@ -753,7 +736,7 @@ const generateContextInfo = () => {
 export const patchMessageForMdIfRequired = (message: proto.IMessage) => {
 	const requiresPatch = !!(
 		message.buttonsMessage
-	    || message.templateMessage
+		|| message.templateMessage
 		|| message.listMessage
 	)
 	if(requiresPatch) {

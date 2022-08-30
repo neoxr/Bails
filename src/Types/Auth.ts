@@ -48,8 +48,6 @@ export type AuthenticationCreds = SignalCreds & {
     platform?: string
 
     processedHistoryMessages: MinimalMessage[]
-    /** number of times history & app state has been synced */
-    accountSyncCounter: number
     accountSettings: AccountSettings
 }
 

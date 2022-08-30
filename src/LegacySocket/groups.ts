@@ -103,7 +103,7 @@ const makeGroupsSocket = (config: LegacySocketConfig) => {
 		return meta
 	}
 
-	socketEvents.on('CB:Chat,cmd:action', () => {
+	socketEvents.on('CB:Chat,cmd:action', (json: BinaryNode) => {
 		/*const data = json[1].data
 		if (data) {
 			const emitGroupParticipantsUpdate = (action: WAParticipantAction) => this.emitParticipantsUpdate

@@ -170,6 +170,7 @@ export const encodeBinaryNode = (
 	}
 
 	const writeString = (str: string) => {
+		// console.log('before write of ', str, ' ', Buffer.from(buffer).toString('hex'))
 		const tokenIndex = TOKEN_MAP[str]
 		if(tokenIndex) {
 			if(typeof tokenIndex.dict === 'number') {
@@ -206,7 +207,7 @@ export const encodeBinaryNode = (
 		typeof attrs[k] !== 'undefined' && attrs[k] !== null
 	))
 
-	writeListStart(2 * validAttributes.length + 1 + (typeof content !== 'undefined' ? 1 : 0))
+	writeListStart(2 * validAttributes.length + 1 + (typeof content !== 'undefined' && content !== null ? 1 : 0))
 	writeString(tag)
 
 	for(const key of validAttributes) {
@@ -224,9 +225,11 @@ export const encodeBinaryNode = (
 	} else if(Array.isArray(content)) {
 		writeListStart(content.length)
 		for(const item of content) {
-			encodeBinaryNode(item, opts, buffer)
+			if(item) {
+				encodeBinaryNode(item, opts, buffer)
+			}
 		}
-	} else if(typeof content === 'undefined') {
+	} else if(typeof content === 'undefined' || content === null) {
 		// do nothing
 	} else {
 		throw new Error(`invalid children for header "${tag}": ${content} (${typeof content})`)
